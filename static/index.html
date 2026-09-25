@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neighborhood Pulse | Live Civic Intelligence</title>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['"Plus Jakarta Sans"', 'sans-serif'],
+                        mono: ['"JetBrains Mono"', 'monospace'],
+                    },
+                    colors: {
+                        slate: { 950: '#030712' }
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <!-- Leaflet CSS & JS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <style>
+        body { background-color: #030712; color: #f3f4f6; }
+        
+        .glass-panel {
+            background: rgba(17, 24, 39, 0.8);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        
+        #map { height: 100%; width: 100%; min-height: 480px; background: #030712; cursor: crosshair; }
+        .leaflet-container { font-family: 'Plus Jakarta Sans', sans-serif !important; }
+        .leaflet-popup-content-wrapper {
+            background: #0f172a !important;
+            color: #f8fafc !important;
+            border: 1px solid #334155;
+            border-radius: 12px !important;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5) !important;
+        }
+        .leaflet-popup-tip { background: #0f172a !important; }
+
+        @keyframes pulse-ring {
+            0% { transform: scale(0.35); opacity: 0.9; }
+            80%, 100% { transform: scale(2.2); opacity: 0; }
+        }
+        
+        .pulse-beacon {
+            position: relative;
+            width: 32px; height: 32px;
+        }
+        .pulse-beacon::before {
+            content: '';
+            position: absolute; left: 0; top: 0;
+            width: 100%; height: 100%;
+            border-radius: 50%;
+            background-color: var(--beacon-color);
+            animation: pulse-ring 2.5s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+        }
+        .pulse-beacon-core {
+            position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 14px; height: 14px;
+            border-radius: 50%;
+            background-color: var(--beacon-color);
+            border: 2px solid #ffffff;
+            box-shadow: 0 0 12px var(--beacon-color);
+        }
+
+        /* Target probe pin */
+        .probe-pin {
+            width: 20px; height: 20px;
+            background: #38bdf8;
+            border: 3px solid #ffffff;
+            border-radius: 50%;
+            box-shadow: 0 0 15px #38bdf8;
+        }
+
+        @keyframes flash-entry {
+            0% { background-color: rgba(59, 130, 246, 0.25); }
+            100% { background-color: rgba(15, 23, 42, 0.6); }
+        }
+        .new-entry { animation: flash-entry 1.5s ease-out; }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col font-sans antialiased selection:bg-cyan-500 selection:text-white">
+
+    <!-- Top Navigation Bar -->
+    <header class="h-16 border-b border-slate-800/80 glass-panel sticky top-0 z-50 flex items-center justify-between px-6">
+        <div class="flex items-center space-x-3">
+            <div class="relative flex h-3 w-3">
+                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+            </div>
+            <h1 class="text-lg font-bold tracking-wide bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-transparent">
+                NEIGHBORHOOD PULSE
+            </h1>
+            <span class="text-xs font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">SPATIAL PROBE v4.0</span>
+        </div>
+
+        <div class="flex items-center space-x-6 text-xs font-mono text-slate-400">
+            <div>
+                <span class="text-slate-500">CURSOR POS:</span>
+                <span id="cursor-coords" class="text-amber-400 font-semibold">Hover over map</span>
+            </div>
+            <div>
+                <span class="text-slate-500">LAST SYNC:</span>
+                <span id="last-sync-time" class="text-slate-200 font-semibold">--:--:--</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content Container -->
+    <main class="flex-1 max-w-[1700px] w-full mx-auto p-4 md:p-6 space-y-6">
+        
+        <!-- Top Row: Map & Live Feeds -->
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            
+            <!-- Map Container (8 cols) -->
+            <section class="lg:col-span-8 flex flex-col space-y-4">
+                <div class="glass-panel rounded-2xl p-2 relative overflow-hidden flex-1 min-h-[480px] shadow-2xl">
+                    
+                    <!-- Top Left Dropbar & Controls -->
+                    <div class="absolute top-4 left-4 z-[400] flex flex-col sm:flex-row items-start sm:items-center space-y-2 sm:space-y-0 sm:space-x-3">
+                        <div class="glass-panel px-3 py-1.5 rounded-xl flex items-center space-x-2 border border-slate-700 shadow-lg">
+                            <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/>
+                            </svg>
+                            <select id="location-dropbar" onchange="onLocationSelect(this.value)" class="bg-transparent text-xs font-semibold text-slate-200 focus:outline-none cursor-pointer py-1">
+                                <option value="" class="bg-slate-900 text-slate-400">-- Quick Jump to Zone --</option>
+                                <option value="40.7128,-74.0060" class="bg-slate-900 text-slate-200">Downtown Core (40.712, -74.006)</option>
+                                <option value="40.7549,-73.9840" class="bg-slate-900 text-slate-200">Midtown Hub (40.754, -73.984)</option>
+                                <option value="40.7831,-73.9712" class="bg-slate-900 text-slate-200">Uptown North (40.783, -73.971)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Dynamic Map Overlay Box for Cursor Telemetry -->
+                    <div class="absolute bottom-4 left-4 z-[400] glass-panel p-3 rounded-xl border border-slate-700 shadow-xl max-w-sm hidden sm:block">
+                        <p class="text-[10px] font-mono uppercase tracking-wider text-slate-400">Cursor Radar Telemetry</p>
+                        <p id="cursor-telemetry-text" class="text-xs font-medium text-slate-200 mt-1">Move cursor across the map to inspect live spatial signals.</p>
+                    </div>
+
+                    <div id="map" class="rounded-xl"></div>
+                </div>
+
+                <!-- Summary Metrics Bar -->
+                <div class="grid grid-cols-3 gap-4">
+                    <div class="glass-panel rounded-xl p-4 border border-slate-800">
+                        <p class="text-xs text-slate-400 font-medium uppercase tracking-wider">Active Monitoring Zones</p>
+                        <p id="total-zones-count" class="text-2xl font-extrabold text-white mt-1">3</p>
+                    </div>
+                    <div class="glass-panel rounded-xl p-4 border border-slate-800">
+                        <p class="text-xs text-slate-400 font-medium uppercase tracking-wider">Stream Events (60m)</p>
+                        <p id="total-events-count" class="text-2xl font-extrabold text-cyan-400 mt-1">--</p>
+                    </div>
+                    <div class="glass-panel rounded-xl p-4 border border-slate-800">
+                        <p class="text-xs text-slate-400 font-medium uppercase tracking-wider">Probe Radius Incidents</p>
+                        <p id="local-incidents-count" class="text-2xl font-extrabold text-amber-400 mt-1">--</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Right: Probe Panel & Multi-Rate Stream (4 cols) -->
+            <section class="lg:col-span-4 flex flex-col space-y-6">
+                
+                <!-- Target Location Probe Status Card -->
+                <div class="glass-panel rounded-2xl p-5 border border-slate-800 flex flex-col">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-xs font-bold uppercase tracking-widest text-slate-400">Target Probe Inspection</h2>
+                        <span id="probe-badge" class="text-[10px] bg-cyan-950 text-cyan-400 border border-cyan-800 px-2 py-0.5 rounded-full font-mono">ACTIVE</span>
+                    </div>
+
+                    <div id="probe-summary-container" class="space-y-3">
+                        <div class="p-4 rounded-xl bg-slate-900/80 border border-slate-800 space-y-2">
+                            <p class="text-xs text-slate-400 leading-relaxed">
+                                Click anywhere on the map or hover over a location to inspect localized telemetry and incident density.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Live Stream Feed -->
+                <div class="glass-panel rounded-2xl p-5 border border-slate-800 flex-1 flex flex-col min-h-[280px]">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-xs font-bold uppercase tracking-widest text-slate-400">Live Multi-Rate Stream</h2>
+                        <span class="text-[10px] font-mono text-slate-500" id="stream-count">0 items</span>
+                    </div>
+
+                    <div class="flex-1 overflow-y-auto max-h-[320px] pr-1 space-y-2" id="event-ticker">
+                        <!-- Dynamic Event Feed -->
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <!-- Bottom Section: City / Zone Cards Grid -->
+        <section class="space-y-4">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h2 class="text-base font-bold text-white tracking-wide">MONITORED NEIGHBORHOOD ZONES</h2>
+                    <p class="text-xs text-slate-400">Real-time status cards for all spatial zones in the active footprint.</p>
+                </div>
+                <span class="text-xs font-mono text-cyan-400 bg-cyan-950 border border-cyan-800 px-2.5 py-1 rounded-full">3 Active Feeds</span>
+            </div>
+
+            <!-- Cards Container -->
+            <div id="city-cards-grid" class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <!-- Zone Cards dynamically populated here -->
+            </div>
+        </section>
+
+    </main>
+
+    <script>
+        // 1. Map Setup
+        const map = L.map('map', { zoomControl: false }).setView([40.7484, -73.9857], 12);
+        L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+            maxZoom: 16,
+            attribution: 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ'
+        }).addTo(map);
+
+        let layerGroup = L.layerGroup().addTo(map);
+        let probeMarker = null;
+        let probeCircle = null;
+        let globalPulseData = null;
+
+        // 2. Helper Functions
+        function getRelativeTime(isoString) {
+            const date = new Date(isoString);
+            const diffSeconds = Math.floor((new Date() - date) / 1000);
+            if (diffSeconds < 5) return 'Just now';
+            if (diffSeconds < 60) return `${diffSeconds}s ago`;
+            const diffMinutes = Math.floor(diffSeconds / 60);
+            if (diffMinutes < 60) return `${diffMinutes}m ago`;
+            return `${Math.floor(diffMinutes / 60)}h ago`;
+        }
+
+        function createBeaconIcon(color) {
+            return L.divIcon({
+                className: 'custom-beacon-icon',
+                html: `<div class="pulse-beacon" style="--beacon-color: ${color};"><div class="pulse-beacon-core"></div></div>`,
+                iconSize: [32, 32],
+                iconAnchor: [16, 16]
+            });
+        }
+
+        function getDistanceKm(lat1, lon1, lat2, lon2) {
+            const R = 6371;
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                      Math.sin(dLon/2) * Math.sin(dLon/2);
+            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        }
+
+        // 3. Dynamic Telemetry & Probing API Logic
+        async function fetchDynamicProbeData(lat, lon, label = "Target Coordinate Probe") {
+            const container = document.getElementById('probe-summary-container');
+            const badge = document.getElementById('probe-badge');
+            
+            if (badge) {
+                badge.className = "text-[10px] bg-sky-950 text-sky-400 border border-sky-800 px-2 py-0.5 rounded-full font-mono animate-pulse";
+                badge.textContent = "FETCHING TELEMETRY...";
+            }
+
+            try {
+                const res = await fetch(`/api/probe?lat=${lat}&lon=${lon}`);
+                const data = await res.json();
+
+                const countElem = document.getElementById('local-incidents-count');
+                if (countElem) countElem.textContent = data.incidents_count;
+
+                if (container) {
+                    if (data.incidents_count > 0) {
+                        if (badge) {
+                            badge.className = "text-[10px] bg-amber-950 text-amber-400 border border-amber-800 px-2 py-0.5 rounded-full font-mono";
+                            badge.textContent = `${data.status} SIGNAL (${data.score}/100)`;
+                        }
+
+                        let incidentsList = data.incidents.map(inc => 
+                            `<li class="text-slate-300 font-medium">• ${inc.text}</li>`
+                        ).join('');
+
+                        container.innerHTML = `
+                            <div class="p-3.5 rounded-xl border bg-slate-900/90 border-slate-700 space-y-2">
+                                <div class="flex justify-between items-center">
+                                    <span class="font-bold text-sm text-cyan-300">${label}</span>
+                                    <span class="text-xs text-amber-400 font-mono font-semibold">${data.incidents_count} Live Incidents</span>
+                                </div>
+                                <p class="text-xs text-slate-400 font-mono">${data.weather}</p>
+                                <div class="mt-2 text-xs space-y-1">
+                                    <p class="text-slate-400 font-semibold uppercase text-[10px]">Real-Time Reports:</p>
+                                    <ul class="space-y-1 pl-1">${incidentsList}</ul>
+                                </div>
+                            </div>
+                        `;
+                    } else {
+                        if (badge) {
+                            badge.className = "text-[10px] bg-emerald-950 text-emerald-400 border border-emerald-800 px-2 py-0.5 rounded-full font-mono";
+                            badge.textContent = "CLEAR BASELINE";
+                        }
+
+                        container.innerHTML = `
+                            <div class="p-3.5 rounded-xl border bg-slate-900/90 border-slate-800 space-y-2">
+                                <div class="flex justify-between items-center">
+                                    <span class="font-bold text-sm text-slate-200">${label}</span>
+                                    <span class="text-xs text-emerald-400 font-mono">0 Incidents</span>
+                                </div>
+                                <p class="text-xs text-slate-400 font-mono">${data.weather}</p>
+                                <p class="text-xs text-slate-400 leading-relaxed">
+                                    No active disruption reports found at this exact location.
+                                </p>
+                            </div>
+                        `;
+                    }
+                }
+            } catch (err) {
+                console.error("Failed to fetch coordinate telemetry:", err);
+            }
+        }
+
+        function setMapProbe(lat, lon, label = "Target Probe Point") {
+            if (probeMarker) map.removeLayer(probeMarker);
+            if (probeCircle) map.removeLayer(probeCircle);
+
+            probeMarker = L.marker([lat, lon], {
+                icon: L.divIcon({ className: 'probe-pin', iconSize: [20, 20], iconAnchor: [10, 10] })
+            }).addTo(map);
+
+            probeCircle = L.circle([lat, lon], {
+                color: '#38bdf8', fillColor: '#38bdf8', fillOpacity: 0.15, radius: 1500, dashArray: '4, 8'
+            }).addTo(map);
+
+            map.panTo([lat, lon]);
+            fetchDynamicProbeData(lat, lon, label);
+        }
+
+        // 4. Map Event Listeners
+        map.on('click', function(e) {
+            setMapProbe(e.latlng.lat, e.latlng.lng, `Sector (${e.latlng.lat.toFixed(3)}, ${e.latlng.lng.toFixed(3)})`);
+        });
+
+        map.on('mousemove', function(e) {
+            const lat = e.latlng.lat;
+            const lon = e.latlng.lng;
+            document.getElementById('cursor-coords').textContent = `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+
+            if (globalPulseData) {
+                const countNearby = globalPulseData.recent_events.filter(ev => getDistanceKm(lat, lon, ev.lat, ev.lon) <= 1.5).length;
+                document.getElementById('cursor-telemetry-text').innerHTML = `
+                    Cursor at <span class="text-cyan-400 font-mono">${lat.toFixed(3)}, ${lon.toFixed(3)}</span> • 
+                    <span class="text-white font-semibold">${countNearby} events</span> within 1.5km
+                `;
+            }
+        });
+
+        function onLocationSelect(value) {
+            if (!value) return;
+            const [lat, lon] = value.split(',').map(Number);
+            const dropbar = document.getElementById('location-dropbar');
+            const selectedText = dropbar.options[dropbar.selectedIndex].text.split('(')[0].trim();
+            setMapProbe(lat, lon, selectedText);
+        }
+
+        // 5. Main Data Polling Loop
+        async function fetchPulseData() {
+            try {
+                const res = await fetch('/api/pulse');
+                globalPulseData = await res.json();
+                
+                document.getElementById('last-sync-time').textContent = new Date().toTimeString().split(' ')[0];
+
+                layerGroup.clearLayers();
+                const zones = globalPulseData.zones;
+
+                // Populate Zone Cards Grid
+                const cityGrid = document.getElementById('city-cards-grid');
+                cityGrid.innerHTML = '';
+
+                Object.keys(zones).forEach(z_id => {
+                    const z = zones[z_id];
+                    const color = z.status === 'Red' ? '#ef4444' : z.status === 'Amber' ? '#f59e0b' : '#10b981';
+
+                    // Add zone map markers
+                    L.circle([z.lat, z.lon], {
+                        color: color, fillColor: color, fillOpacity: 0.15, weight: 1.5, radius: 1400
+                    }).addTo(layerGroup);
+
+                    L.marker([z.lat, z.lon], { icon: createBeaconIcon(color) })
+                        .addTo(layerGroup)
+                        .bindPopup(`<b>${z.name}</b><br>Score: ${z.score}<br><span style="font-size:11px;color:#94a3b8">${z.summary}</span>`);
+
+                    // Create bottom city cards
+                    const card = document.createElement('div');
+                    card.className = "glass-panel rounded-2xl p-5 border border-slate-800 space-y-3 cursor-pointer hover:border-slate-600 transition shadow-lg";
+                    card.onclick = () => setMapProbe(z.lat, z.lon, z.name);
+                    card.innerHTML = `
+                        <div class="flex justify-between items-center border-b border-slate-800/80 pb-3">
+                            <div>
+                                <h3 class="font-bold text-base text-white">${z.name}</h3>
+                                <p class="text-[10px] font-mono text-slate-500">LAT: ${z.lat} | LON: ${z.lon}</p>
+                            </div>
+                            <span class="px-3 py-1 text-xs font-bold font-mono rounded-full" style="background-color: ${color}20; color: ${color}; border: 1px solid ${color}40">
+                                ${z.status.toUpperCase()} • ${z.score}
+                            </span>
+                        </div>
+                        <p class="text-xs text-slate-300 leading-relaxed">${z.summary}</p>
+                        <div class="pt-2 flex justify-between items-center text-[11px] font-mono text-cyan-400">
+                            <span>Click to center target probe &rarr;</span>
+                        </div>
+                    `;
+                    cityGrid.appendChild(card);
+                });
+
+                document.getElementById('total-events-count').textContent = globalPulseData.recent_events.length;
+
+                // Event Stream Ticker
+                const ticker = document.getElementById('event-ticker');
+                ticker.innerHTML = '';
+                document.getElementById('stream-count').textContent = `${globalPulseData.recent_events.length} items`;
+
+                globalPulseData.recent_events.slice().reverse().forEach((ev, idx) => {
+                    const li = document.createElement('div');
+                    const isNew = idx === 0 ? 'new-entry' : '';
+                    li.className = `p-3 bg-slate-900/60 rounded-xl border border-slate-800/80 text-xs flex justify-between items-start space-x-3 ${isNew}`;
+                    const sourceColor = ev.source === 'weather' ? 'text-sky-400 bg-sky-950/50 border-sky-800/50' : 'text-amber-400 bg-amber-950/50 border-amber-800/50';
+
+                    li.innerHTML = `
+                        <div class="space-y-1">
+                            <div class="flex items-center space-x-2">
+                                <span class="px-1.5 py-0.5 text-[10px] font-mono uppercase font-semibold rounded border ${sourceColor}">
+                                    ${ev.source}
+                                </span>
+                                <span class="font-medium text-slate-300">${ev.text}</span>
+                            </div>
+                        </div>
+                        <span class="text-[10px] font-mono text-slate-500 whitespace-nowrap">${getRelativeTime(ev.timestamp)}</span>
+                    `;
+                    ticker.appendChild(li);
+                });
+
+            } catch (err) {
+                console.error("Pulse update error:", err);
+            }
+        }
+
+        // Initial launch & start polling
+        fetchPulseData();
+        setInterval(fetchPulseData, 5000);
+    </script>
+</body>
+</html>
